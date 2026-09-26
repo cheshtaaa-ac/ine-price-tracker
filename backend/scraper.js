@@ -1,13 +1,12 @@
 const { chromium } = require('playwright');
 
-const MAX_RETRIES = 12;
+// Bounded retries for the site's unreliable challenge.
+const MAX_RETRIES = 20;
 const WAIT_BETWEEN_MS = 4000;
-const MAX_TOTAL_MS = 120000;
+const MAX_TOTAL_MS = 180000;
 const MAX_STORED_FAILURES = 20;
 
-// In-memory ring buffer of recent failures so you can inspect what actually
-// happened without re-running a live scrape. Cleared on redeploy/restart -
-// good enough for debugging, not meant as permanent storage.
+// Recent failures kept in memory for debugging.
 const recentFailures = [];
 
 function recordFailure(entry) {
@@ -34,29 +33,42 @@ async function dismissCookieBanner(page) {
   }
 }
 
-// The first check button needed a settle-then-poll before it was safe to
-// click - a hover alone didn't make it clickable immediately. There's no
-// reason to assume the retry button is different, so both go through this
-// same wait-until-enabled step instead of one being polled and the other
-// clicked blind right after a single hover.
-async function waitThenClick(page, pricePanel, button, { maxPolls = 15, pollMs = 500 } = {}) {
+// Wait for the button to become enabled before clicking.
+async function waitThenClick(
+  page,
+  pricePanel,
+  button,
+  { maxPolls = 15, pollMs = 500 } = {}
+) {
   for (let i = 0; i < maxPolls; i++) {
     await dismissCookieBanner(page);
     await pricePanel.hover({ force: true }).catch(() => {});
+
     const disabledAttr = await button.getAttribute('disabled').catch(() => 'ERR');
     if (disabledAttr === null) break;
+
     await page.waitForTimeout(pollMs);
   }
+
   await dismissCookieBanner(page);
+
   const visible = await button.isVisible().catch(() => false);
   if (!visible) return false;
+
   await button.click({ force: true }).catch(() => {});
   return true;
 }
 
+// Capture a screenshot when scraping fails.
 async function captureFailureScreenshot(page) {
   try {
-    return (await page.screenshot({ type: 'jpeg', quality: 40, fullPage: true })).toString('base64');
+    return (
+      await page.screenshot({
+        type: 'jpeg',
+        quality: 40,
+        fullPage: true
+      })
+    ).toString('base64');
   } catch {
     return null;
   }
@@ -74,14 +86,11 @@ async function scrapeProduct(itemId, optionLabel, { headed = false } = {}) {
       '--no-zygote'
     ]
   });
+
   const page = await browser.newPage();
   page.setDefaultTimeout(30000);
 
-  // Ground truth from the wire. Deliberately NOT filtered by URL keyword this
-  // time - the last run showed zero matches for quote|price|offer|challenge
-  // even though the panel clearly cycled through real state changes, which
-  // means that filter was hiding the real request from us, not skipping
-  // noise. Capped by length instead, so we still see everything relevant.
+  // Capture network requests for debugging challenge failures.
   const MAX_NETWORK_LOG = 60;
   const networkLog = [];
   const wsLog = [];
@@ -90,30 +99,49 @@ async function scrapeProduct(itemId, optionLabel, { headed = false } = {}) {
     try {
       const resourceType = response.request().resourceType();
       if (resourceType !== 'xhr' && resourceType !== 'fetch') return;
+
       let bodySnippet = '';
       try {
         bodySnippet = (await response.text()).slice(0, 300);
-      } catch {
-        // binary/encrypted body, or already consumed - skip
-      }
-      networkLog.push({ url: response.url(), status: response.status(), bodySnippet, atMs: Date.now() });
+      } catch {}
+
+      networkLog.push({
+        url: response.url(),
+        method: response.request().method(),
+        status: response.status(),
+        bodySnippet,
+        atMs: Date.now()
+      });
+
       if (networkLog.length > MAX_NETWORK_LOG) networkLog.shift();
-    } catch {
-      // response object can go stale (navigation, redirect) - ignore
-    }
+    } catch {}
   });
 
-  // If the challenge actually resolves over a WebSocket instead of HTTP,
-  // the listener above would never see it. Cheap to check directly instead
-  // of arguing about it - if wsLog stays empty too, that theory is dead.
+  // Capture WebSocket activity if present.
   page.on('websocket', (ws) => {
-    wsLog.push({ url: ws.url(), atMs: Date.now(), direction: 'opened' });
+    wsLog.push({
+      url: ws.url(),
+      atMs: Date.now(),
+      direction: 'opened'
+    });
+
     ws.on('framereceived', (frame) => {
-      wsLog.push({ direction: 'received', atMs: Date.now(), payload: String(frame.payload).slice(0, 200) });
+      wsLog.push({
+        direction: 'received',
+        atMs: Date.now(),
+        payload: String(frame.payload).slice(0, 200)
+      });
+
       if (wsLog.length > MAX_NETWORK_LOG) wsLog.shift();
     });
+
     ws.on('framesent', (frame) => {
-      wsLog.push({ direction: 'sent', atMs: Date.now(), payload: String(frame.payload).slice(0, 200) });
+      wsLog.push({
+        direction: 'sent',
+        atMs: Date.now(),
+        payload: String(frame.payload).slice(0, 200)
+      });
+
       if (wsLog.length > MAX_NETWORK_LOG) wsLog.shift();
     });
   });
@@ -126,33 +154,46 @@ async function scrapeProduct(itemId, optionLabel, { headed = false } = {}) {
   let lastPanelText = '';
 
   try {
-    await page.goto(`https://demo.inelabteamdev.com/item/${itemId}`, { waitUntil: 'networkidle' });
+    await page.goto(
+      `https://demo.inelabteamdev.com/item/${itemId}`,
+      { waitUntil: 'networkidle' }
+    );
+
     await page.waitForTimeout(1000);
     await dismissCookieBanner(page);
 
-    await page.getByRole('button', { name: optionLabel, exact: true }).click({ force: true });
+    await page
+      .getByRole('button', { name: optionLabel, exact: true })
+      .click({ force: true });
+
     await dismissCookieBanner(page);
     await page.waitForTimeout(500);
 
     const pricePanel = page.locator('.offer-panel');
-    const checkBtn = page.getByRole('button', { name: /check today.?s price/i });
+    const checkBtn = page.getByRole('button', {
+      name: /check today.?s price/i
+    });
+
     const priceInPanel = pricePanel.locator('text=/₹[\\d,]+/');
-    // Fallback only - matching anywhere on the page risks picking up an
-    // unrelated ₹ figure (nav, MRP strike-through, "similar products"), so
-    // this is a second choice, used only when the panel itself has nothing
-    // and logged distinctly so a page-wide match can be told apart later.
     const priceOnPage = page.locator('text=/₹[\\d,]+/');
 
     await waitThenClick(page, pricePanel, checkBtn);
 
-    while (attempts < MAX_RETRIES && (Date.now() - startTime) < MAX_TOTAL_MS) {
+    while (
+      attempts < MAX_RETRIES &&
+      Date.now() - startTime < MAX_TOTAL_MS
+    ) {
       attempts++;
+
       await page.waitForTimeout(WAIT_BETWEEN_MS);
       await dismissCookieBanner(page);
 
       lastPanelText = await pricePanel.innerText().catch(() => '');
+
       let priceTexts = await priceInPanel.allTextContents().catch(() => []);
       let priceSource = 'panel';
+
+      // Fallback if the price is not found inside the offer panel.
       if (!priceTexts.length) {
         priceTexts = await priceOnPage.allTextContents().catch(() => []);
         priceSource = 'page-wide-fallback';
@@ -160,25 +201,53 @@ async function scrapeProduct(itemId, optionLabel, { headed = false } = {}) {
 
       if (priceTexts.length) {
         price = parsePrice(priceTexts[priceTexts.length - 1]);
-        const soldOut = await page.getByText(/sold out/i).isVisible().catch(() => false);
+
+        const soldOut = await page
+          .getByText(/sold out/i)
+          .isVisible()
+          .catch(() => false);
+
         stock = soldOut ? 'Out of Stock' : 'In Stock';
         outcome = attempts === 1 ? 'success' : 'retried';
-        console.log(`Succeeded on attempt ${attempts} (source: ${priceSource}): price=${price}, stock=${stock}`);
+
+        console.log(
+          `Succeeded on attempt ${attempts} (source: ${priceSource}): price=${price}, stock=${stock}`
+        );
+
         break;
       }
 
+      // Retry when the site's challenge fails.
       if (/challenge_failed/i.test(lastPanelText)) {
         console.log(`Attempt ${attempts}: challenge_failed, retrying`);
-        const retryBtn = page.getByRole('button', { name: /retry|check again/i });
-        const clicked = await waitThenClick(page, pricePanel, retryBtn);
-        if (!clicked) console.log(`Attempt ${attempts}: retry button never became visible/enabled`);
+
+        const retryBtn = page.getByRole('button', {
+          name: /retry|check again/i
+        });
+
+        const clicked = await waitThenClick(
+          page,
+          pricePanel,
+          retryBtn
+        );
+
+        if (!clicked) {
+          console.log(
+            `Attempt ${attempts}: retry button unavailable`
+          );
+        }
       } else {
-        console.log(`Attempt ${attempts}: panel says: "${lastPanelText.slice(0, 60)}"`);
+        console.log(
+          `Attempt ${attempts}: panel says: "${lastPanelText.slice(0, 60)}"`
+        );
       }
     }
 
     if (!price) {
-      console.log(`Gave up after ${attempts} attempts / ${Date.now() - startTime}ms`);
+      console.log(
+        `Gave up after ${attempts} attempts / ${Date.now() - startTime}ms`
+      );
+
       recordFailure({
         itemId,
         optionLabel,
@@ -187,11 +256,12 @@ async function scrapeProduct(itemId, optionLabel, { headed = false } = {}) {
         panelText: lastPanelText,
         networkLog,
         wsLog,
-        screenshot: await captureFailureScreenshot(page),
+        screenshot: await captureFailureScreenshot(page)
       });
     }
   } catch (err) {
     console.error('Scrape error:', err.message);
+
     recordFailure({
       itemId,
       optionLabel,
@@ -200,13 +270,24 @@ async function scrapeProduct(itemId, optionLabel, { headed = false } = {}) {
       panelText: lastPanelText,
       networkLog,
       wsLog,
-      error: err.message,
+      error: err.message
     });
   } finally {
     await browser.close();
   }
 
-  return { itemId, option: optionLabel, price, stock, outcome, attempts, timestamp: new Date().toISOString() };
+  return {
+    itemId,
+    option: optionLabel,
+    price,
+    stock,
+    outcome,
+    attempts,
+    timestamp: new Date().toISOString()
+  };
 }
 
-module.exports = { scrapeProduct, getRecentFailures };
+module.exports = {
+  scrapeProduct,
+  getRecentFailures
+};
