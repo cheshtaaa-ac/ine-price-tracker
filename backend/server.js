@@ -19,11 +19,19 @@ app.post('/products', async (req, res) => {
   if (!store_product_id || !product_name || !option_name) {
     return res.status(400).json({ error: 'store_product_id, product_name, option_name required' });
   }
+
   const { data, error } = await supabase
     .from('tracked_products')
     .insert([{ store_product_id, product_name, option_name }])
     .select();
-  if (error) return res.status(500).json({ error: error.message });
+
+  if (error) {
+    if (error.code === '23505') {
+      return res.status(409).json({ error: 'This product and option is already being tracked.' });
+    }
+    return res.status(500).json({ error: error.message });
+  }
+
   res.json(data[0]);
 });
 
