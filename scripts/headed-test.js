@@ -6,7 +6,7 @@
 // just with headed: true so a real Chromium window opens and you can
 // record it for the "Observable (Headed) Run" deliverable.
 
-const { scrapeProduct } = require('../scraper');
+const { scrapeProduct } = require("../backend/scraper")
 
 const [, , itemId, optionLabel] = process.argv;
 

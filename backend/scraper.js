@@ -1,22 +1,8 @@
 const { chromium } = require('playwright');
 
-// Bounded retries for the site's unreliable challenge.
-const MAX_RETRIES = 20;
+const MAX_RETRIES = 12;
 const WAIT_BETWEEN_MS = 4000;
-const MAX_TOTAL_MS = 180000;
-const MAX_STORED_FAILURES = 20;
-
-// Recent failures kept in memory for debugging.
-const recentFailures = [];
-
-function recordFailure(entry) {
-  recentFailures.push(entry);
-  if (recentFailures.length > MAX_STORED_FAILURES) recentFailures.shift();
-}
-
-function getRecentFailures() {
-  return recentFailures;
-}
+const MAX_TOTAL_MS = 120000;
 
 function parsePrice(text) {
   const match = text.match(/₹([\d,]+)/);
@@ -33,261 +19,88 @@ async function dismissCookieBanner(page) {
   }
 }
 
-// Wait for the button to become enabled before clicking.
-async function waitThenClick(
-  page,
-  pricePanel,
-  button,
-  { maxPolls = 15, pollMs = 500 } = {}
-) {
-  for (let i = 0; i < maxPolls; i++) {
-    await dismissCookieBanner(page);
-    await pricePanel.hover({ force: true }).catch(() => {});
-
-    const disabledAttr = await button.getAttribute('disabled').catch(() => 'ERR');
-    if (disabledAttr === null) break;
-
-    await page.waitForTimeout(pollMs);
-  }
-
-  await dismissCookieBanner(page);
-
-  const visible = await button.isVisible().catch(() => false);
-  if (!visible) return false;
-
-  await button.click({ force: true }).catch(() => {});
-  return true;
-}
-
-// Capture a screenshot when scraping fails.
-async function captureFailureScreenshot(page) {
-  try {
-    return (
-      await page.screenshot({
-        type: 'jpeg',
-        quality: 40,
-        fullPage: true
-      })
-    ).toString('base64');
-  } catch {
-    return null;
-  }
-}
-
 async function scrapeProduct(itemId, optionLabel, { headed = false } = {}) {
   const browser = await chromium.launch({
-    headless: !headed,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-      '--single-process',
-      '--no-zygote'
-    ]
-  });
-
+  headless: !headed,
+  args: [
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-dev-shm-usage',
+    '--disable-gpu',
+    '--single-process',
+    '--no-zygote'
+  ]
+});
   const page = await browser.newPage();
   page.setDefaultTimeout(30000);
-
-  // Capture network requests for debugging challenge failures.
-  const MAX_NETWORK_LOG = 60;
-  const networkLog = [];
-  const wsLog = [];
-
-  page.on('response', async (response) => {
-    try {
-      const resourceType = response.request().resourceType();
-      if (resourceType !== 'xhr' && resourceType !== 'fetch') return;
-
-      let bodySnippet = '';
-      try {
-        bodySnippet = (await response.text()).slice(0, 300);
-      } catch {}
-
-      networkLog.push({
-        url: response.url(),
-        method: response.request().method(),
-        status: response.status(),
-        bodySnippet,
-        atMs: Date.now()
-      });
-
-      if (networkLog.length > MAX_NETWORK_LOG) networkLog.shift();
-    } catch {}
-  });
-
-  // Capture WebSocket activity if present.
-  page.on('websocket', (ws) => {
-    wsLog.push({
-      url: ws.url(),
-      atMs: Date.now(),
-      direction: 'opened'
-    });
-
-    ws.on('framereceived', (frame) => {
-      wsLog.push({
-        direction: 'received',
-        atMs: Date.now(),
-        payload: String(frame.payload).slice(0, 200)
-      });
-
-      if (wsLog.length > MAX_NETWORK_LOG) wsLog.shift();
-    });
-
-    ws.on('framesent', (frame) => {
-      wsLog.push({
-        direction: 'sent',
-        atMs: Date.now(),
-        payload: String(frame.payload).slice(0, 200)
-      });
-
-      if (wsLog.length > MAX_NETWORK_LOG) wsLog.shift();
-    });
-  });
 
   const startTime = Date.now();
   let attempts = 0;
   let outcome = 'failed';
   let price = null;
   let stock = null;
-  let lastPanelText = '';
 
   try {
-    await page.goto(
-      `https://demo.inelabteamdev.com/item/${itemId}`,
-      { waitUntil: 'networkidle' }
-    );
-
+    await page.goto(`https://demo.inelabteamdev.com/item/${itemId}`, { waitUntil: 'networkidle' });
     await page.waitForTimeout(1000);
     await dismissCookieBanner(page);
 
-    await page
-      .getByRole('button', { name: optionLabel, exact: true })
-      .click({ force: true });
-
+    await page.getByRole('button', { name: optionLabel, exact: true }).click({ force: true });
     await dismissCookieBanner(page);
     await page.waitForTimeout(500);
 
     const pricePanel = page.locator('.offer-panel');
-    const checkBtn = page.getByRole('button', {
-      name: /check today.?s price/i
-    });
+    const checkBtn = page.getByRole('button', { name: /check today.?s price/i });
 
-    const priceInPanel = pricePanel.locator('text=/₹[\\d,]+/');
-    const priceOnPage = page.locator('text=/₹[\\d,]+/');
+    for (let i = 0; i < 15; i++) {
+      await dismissCookieBanner(page);
+      await pricePanel.hover({ force: true }).catch(() => {});
+      const disabledAttr = await checkBtn.getAttribute('disabled').catch(() => 'ERR');
+      if (disabledAttr === null) break;
+      await page.waitForTimeout(500);
+    }
 
-    await waitThenClick(page, pricePanel, checkBtn);
+    await dismissCookieBanner(page);
+    await checkBtn.click({ timeout: 10000, force: true });
 
-    while (
-      attempts < MAX_RETRIES &&
-      Date.now() - startTime < MAX_TOTAL_MS
-    ) {
+    while (attempts < MAX_RETRIES && (Date.now() - startTime) < MAX_TOTAL_MS) {
       attempts++;
-
       await page.waitForTimeout(WAIT_BETWEEN_MS);
       await dismissCookieBanner(page);
 
-      lastPanelText = await pricePanel.innerText().catch(() => '');
-
-      let priceTexts = await priceInPanel.allTextContents().catch(() => []);
-      let priceSource = 'panel';
-
-      // Fallback if the price is not found inside the offer panel.
-      if (!priceTexts.length) {
-        priceTexts = await priceOnPage.allTextContents().catch(() => []);
-        priceSource = 'page-wide-fallback';
-      }
+      const panelText = await pricePanel.innerText().catch(() => '');
+      const priceTexts = await page.locator('text=/₹[\\d,]+/').allTextContents().catch(() => []);
 
       if (priceTexts.length) {
         price = parsePrice(priceTexts[priceTexts.length - 1]);
-
-        const soldOut = await page
-          .getByText(/sold out/i)
-          .isVisible()
-          .catch(() => false);
-
+        const soldOut = await page.getByText(/sold out/i).isVisible().catch(() => false);
         stock = soldOut ? 'Out of Stock' : 'In Stock';
         outcome = attempts === 1 ? 'success' : 'retried';
-
-        console.log(
-          `Succeeded on attempt ${attempts} (source: ${priceSource}): price=${price}, stock=${stock}`
-        );
-
+        console.log(`Succeeded on attempt ${attempts}: price=${price}, stock=${stock}`);
         break;
       }
 
-      // Retry when the site's challenge fails.
-      if (/challenge_failed/i.test(lastPanelText)) {
-        console.log(`Attempt ${attempts}: challenge_failed, retrying`);
-
-        const retryBtn = page.getByRole('button', {
-          name: /retry|check again/i
-        });
-
-        const clicked = await waitThenClick(
-          page,
-          pricePanel,
-          retryBtn
-        );
-
-        if (!clicked) {
-          console.log(
-            `Attempt ${attempts}: retry button unavailable`
-          );
+      if (/challenge_failed/i.test(panelText)) {
+        console.log(`Attempt ${attempts}: challenge_failed, clicking retry`);
+        const retryBtn = page.getByRole('button', { name: /retry|check again/i });
+        if (await retryBtn.isVisible().catch(() => false)) {
+          await retryBtn.click({ force: true });
         }
       } else {
-        console.log(
-          `Attempt ${attempts}: panel says: "${lastPanelText.slice(0, 60)}"`
-        );
+        console.log(`Attempt ${attempts}: panel says: "${panelText.slice(0, 60)}"`);
       }
     }
 
     if (!price) {
-      console.log(
-        `Gave up after ${attempts} attempts / ${Date.now() - startTime}ms`
-      );
-
-      recordFailure({
-        itemId,
-        optionLabel,
-        timestamp: new Date().toISOString(),
-        attempts,
-        panelText: lastPanelText,
-        networkLog,
-        wsLog,
-        screenshot: await captureFailureScreenshot(page)
-      });
+      console.log(`Gave up after ${attempts} attempts / ${Date.now() - startTime}ms`);
     }
   } catch (err) {
     console.error('Scrape error:', err.message);
-
-    recordFailure({
-      itemId,
-      optionLabel,
-      timestamp: new Date().toISOString(),
-      attempts,
-      panelText: lastPanelText,
-      networkLog,
-      wsLog,
-      error: err.message
-    });
   } finally {
     await browser.close();
   }
 
-  return {
-    itemId,
-    option: optionLabel,
-    price,
-    stock,
-    outcome,
-    attempts,
-    timestamp: new Date().toISOString()
-  };
+  return { itemId, option: optionLabel, price, stock, outcome, attempts, timestamp: new Date().toISOString() };
 }
 
-module.exports = {
-  scrapeProduct,
-  getRecentFailures
-};
+module.exports = { scrapeProduct };
