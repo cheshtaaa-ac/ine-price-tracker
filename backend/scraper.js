@@ -1,6 +1,6 @@
 const { chromium } = require('playwright');
 
-const MAX_RETRIES = 20;
+const MAX_RETRIES = 12;
 const WAIT_BETWEEN_MS = 4000;
 const MAX_TOTAL_MS = 120000;
 
@@ -20,7 +20,17 @@ async function dismissCookieBanner(page) {
 }
 
 async function scrapeProduct(itemId, optionLabel, { headed = false } = {}) {
-  const browser = await chromium.launch({ headless: !headed });
+  const browser = await chromium.launch({
+  headless: !headed,
+  args: [
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-dev-shm-usage',
+    '--disable-gpu',
+    '--single-process',
+    '--no-zygote'
+  ]
+});
   const page = await browser.newPage();
   page.setDefaultTimeout(30000);
 
