@@ -3,7 +3,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const { createClient } = require('@supabase/supabase-js');
-const { scrapeProduct } = require('./scraper');
+const { scrapeProduct, getRecentFailures } = require('./scraper');
 
 const app = express();
 app.use(cors());
@@ -118,6 +118,13 @@ app.get('/export', async (req, res) => {
   res.setHeader('Content-Type', 'text/csv');
   res.setHeader('Content-Disposition', 'attachment; filename=scrape_history.csv');
   res.send(header + rows);
+});
+
+// Inspect the last ~20 failed scrapes directly: panel text at the moment it
+// gave up, the real network responses seen (not just DOM text), and a
+// screenshot - so a failure can be diagnosed without reproducing it live.
+app.get('/debug/failures', (req, res) => {
+  res.json(getRecentFailures());
 });
 
 const PORT = process.env.PORT || 3000;
