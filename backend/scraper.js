@@ -3,14 +3,8 @@ const { chromium } = require('playwright');
 // Retry settings
 const MAX_RETRIES = 12;
 const MAX_TOTAL_MS = 180000;
-
-// Wait up to this long for one challenge attempt to finish.
 const ATTEMPT_WAIT_MS = 30000;
-
-// Short polling interval while the panel is loading.
 const POLL_MS = 500;
-
-// After this many failures, reload the page to reset client-side state.
 const RELOAD_AFTER_FAILURES = 3;
 
 const MAX_STORED_FAILURES = 20;
@@ -29,8 +23,11 @@ function getRecentFailures() {
 }
 
 function parsePrice(text) {
-  // Handles ₹1,234 and ₹ 1,234 and ₹1,234.50
-  const match = text.match(/₹\s*([\d,]+(?:\.\d{1,2})?)/);
+  const clean = text.replace(/[\u200B-\u200D\uFEFF]/g, '');
+
+  const match = clean.match(
+    /₹\s*([\d,]+(?:\.\d{1,2})?)/
+  );
 
   if (!match) return null;
 
@@ -39,16 +36,23 @@ function parsePrice(text) {
 
 async function dismissCookieBanner(page) {
   for (let i = 0; i < 5; i++) {
-    const allowBtn = page.getByRole('button', { name: 'ALLOW' });
+    const allowBtn = page.getByRole('button', {
+      name: 'ALLOW'
+    });
 
-    const visible = await allowBtn.isVisible().catch(() => false);
+    const visible = await allowBtn
+      .isVisible()
+      .catch(() => false);
 
     if (!visible) return;
 
     try {
       await allowBtn.click({ force: true });
     } catch (err) {
-      console.log('Cookie button click failed:', err.message);
+      console.log(
+        'Cookie button click failed:',
+        err.message
+      );
     }
 
     await page.waitForTimeout(300);
@@ -58,15 +62,20 @@ async function dismissCookieBanner(page) {
 async function hoverPricePanel(page, pricePanel) {
   await dismissCookieBanner(page);
 
-  await pricePanel.scrollIntoViewIfNeeded().catch(() => {});
+  await pricePanel
+    .scrollIntoViewIfNeeded()
+    .catch(() => {});
 
-  const box = await pricePanel.boundingBox().catch(() => null);
+  const box = await pricePanel
+    .boundingBox()
+    .catch(() => null);
 
   if (!box) {
-    throw new Error('Price panel has no bounding box');
+    throw new Error(
+      'Price panel has no bounding box'
+    );
   }
 
-  // Real mouse movement rather than only relying on locator.hover().
   await page.mouse.move(0, 0);
   await page.waitForTimeout(100);
 
@@ -85,52 +94,81 @@ async function hoverPricePanel(page, pricePanel) {
   await page.waitForTimeout(300);
 }
 
-async function clickPriceButton(page, pricePanel, checkBtn) {
+async function clickPriceButton(
+  page,
+  pricePanel,
+  checkBtn
+) {
   await hoverPricePanel(page, pricePanel);
 
-  const visible = await checkBtn.isVisible().catch(() => false);
+  const visible = await checkBtn
+    .isVisible()
+    .catch(() => false);
 
   if (!visible) {
-    throw new Error('Check-price button is not visible');
+    throw new Error(
+      'Check-price button is not visible'
+    );
   }
 
-  // Wait for actual enabled state.
   for (let i = 0; i < 20; i++) {
     await dismissCookieBanner(page);
 
-    if (await checkBtn.isEnabled().catch(() => false)) {
+    if (
+      await checkBtn
+        .isEnabled()
+        .catch(() => false)
+    ) {
       await checkBtn.click({ force: true });
       return true;
     }
 
-    await hoverPricePanel(page, pricePanel).catch(() => {});
+    await hoverPricePanel(
+      page,
+      pricePanel
+    ).catch(() => {});
+
     await page.waitForTimeout(300);
   }
 
-  throw new Error('Check-price button never became enabled');
+  throw new Error(
+    'Check-price button never became enabled'
+  );
 }
 
 async function getPanelState(page, pricePanel) {
-  const panelText = await pricePanel.innerText().catch(() => '');
+  const panelText = await pricePanel
+    .innerText()
+    .catch(() => '');
 
-  // Remove zero-width characters used by the store in the visible price.
+  // Remove zero-width characters used by the store
+  // in the visible current price.
   const cleanText = panelText
-    .replace(/[\u200B-\u200D\uFEFF]/g, '')
-    .replace(/\s+/g, ' ');
+    .replace(/[\u200B-\u200D\uFEFF]/g, '');
 
-    console.log('CLEAN PANEL:', cleanText.slice(0, 500));
+  console.log(
+    'CLEAN PANEL:',
+    cleanText.slice(0, 500)
+  );
 
-  // Ignore the old struck-through price and look at the visible
-  // current-price area in the offer panel.
   const lines = cleanText
     .split('\n')
     .map(x => x.trim())
     .filter(Boolean);
 
-  console.log('CLEAN PANEL:', cleanText.slice(0, 500));
-
-  // Current price appears immediately before the savings/delivery information.
-  // Look for a rupee amount that is NOT an obvious old/member price.
+  /*
+   * Look for the visible current price.
+   *
+   * Ignore:
+   * - member price
+   * - saving text
+   * - delivery text
+   * - obvious old/struck-through price
+   *
+   * The visible current price in this store is normally
+   * represented as text in the panel, sometimes split
+   * by zero-width characters.
+   */
   for (const line of lines) {
     if (
       /₹\s*[\d,]+(?:\.\d{1,2})?/.test(line) &&
@@ -152,22 +190,116 @@ async function getPanelState(page, pricePanel) {
   }
 
   if (/challenge_failed/i.test(panelText)) {
-    return { type: 'challenge_failed', panelText };
+    return {
+      type: 'challenge_failed',
+      panelText
+    };
   }
 
   if (/upstream\s*429/i.test(panelText)) {
-    return { type: 'rate_limited', panelText };
+    return {
+      type: 'rate_limited',
+      panelText
+    };
   }
 
   if (/couldn.?t load the price/i.test(panelText)) {
-    return { type: 'failed', panelText };
+    return {
+      type: 'failed',
+      panelText
+    };
   }
 
-  if (/loading current price|retrying/i.test(panelText)) {
-    return { type: 'loading', panelText };
+  if (
+    /loading current price|retrying/i.test(
+      panelText
+    )
+  ) {
+    return {
+      type: 'loading',
+      panelText
+    };
   }
 
-  return { type: 'unknown', panelText };
+  return {
+    type: 'unknown',
+    panelText
+  };
+}
+
+async function waitForPrice(page, pricePanel) {
+  const deadline =
+    Date.now() + ATTEMPT_WAIT_MS;
+
+  let lastText = '';
+
+  while (Date.now() < deadline) {
+    await dismissCookieBanner(page);
+
+    const state = await getPanelState(
+      page,
+      pricePanel
+    );
+
+    lastText = state.panelText || '';
+
+    if (state.type === 'success') {
+      return state;
+    }
+
+    if (
+      state.type === 'challenge_failed' ||
+      state.type === 'rate_limited' ||
+      state.type === 'failed'
+    ) {
+      return state;
+    }
+
+    await page.waitForTimeout(POLL_MS);
+  }
+
+  return {
+    type: 'timeout',
+    panelText: lastText
+  };
+}
+
+async function clickRetry(page, pricePanel) {
+  await dismissCookieBanner(page);
+
+  await hoverPricePanel(
+    page,
+    pricePanel
+  ).catch(() => {});
+
+  const retryBtn = page.getByRole(
+    'button',
+    {
+      name: /retry|check again/i
+    }
+  );
+
+  const visible = await retryBtn
+    .isVisible()
+    .catch(() => false);
+
+  if (!visible) {
+    return false;
+  }
+
+  const enabled = await retryBtn
+    .isEnabled()
+    .catch(() => false);
+
+  if (!enabled) {
+    return false;
+  }
+
+  await retryBtn.click({
+    force: true
+  });
+
+  return true;
 }
 
 async function captureFailureScreenshot(page) {
@@ -184,7 +316,11 @@ async function captureFailureScreenshot(page) {
   }
 }
 
-async function scrapeProduct(itemId, optionLabel, { headed = false } = {}) {
+async function scrapeProduct(
+  itemId,
+  optionLabel,
+  { headed = false } = {}
+) {
   const browser = await chromium.launch({
     headless: !headed,
     args: [
@@ -201,7 +337,6 @@ async function scrapeProduct(itemId, optionLabel, { headed = false } = {}) {
 
   page.setDefaultTimeout(30000);
 
-  // Full diagnostic network logging.
   const networkLog = [];
   const MAX_NETWORK_LOG = 150;
 
@@ -210,12 +345,16 @@ async function scrapeProduct(itemId, optionLabel, { headed = false } = {}) {
       networkLog.push({
         type: 'request',
         method: request.method(),
-        resourceType: request.resourceType(),
+        resourceType:
+          request.resourceType(),
         url: request.url(),
         atMs: Date.now()
       });
 
-      if (networkLog.length > MAX_NETWORK_LOG) {
+      if (
+        networkLog.length >
+        MAX_NETWORK_LOG
+      ) {
         networkLog.shift();
       }
     } catch {}
@@ -223,31 +362,39 @@ async function scrapeProduct(itemId, optionLabel, { headed = false } = {}) {
 
   page.on('response', async response => {
     try {
-      const request = response.request();
+      const request =
+        response.request();
 
       let bodySnippet = '';
 
-      // Only read small textual responses.
       if (
-        request.resourceType() === 'xhr' ||
-        request.resourceType() === 'fetch'
+        request.resourceType() ===
+          'xhr' ||
+        request.resourceType() ===
+          'fetch'
       ) {
         try {
-          bodySnippet = (await response.text()).slice(0, 500);
+          bodySnippet = (
+            await response.text()
+          ).slice(0, 500);
         } catch {}
       }
 
       networkLog.push({
         type: 'response',
         method: request.method(),
-        resourceType: request.resourceType(),
+        resourceType:
+          request.resourceType(),
         status: response.status(),
         url: response.url(),
         bodySnippet,
         atMs: Date.now()
       });
 
-      if (networkLog.length > MAX_NETWORK_LOG) {
+      if (
+        networkLog.length >
+        MAX_NETWORK_LOG
+      ) {
         networkLog.shift();
       }
     } catch {}
@@ -277,25 +424,29 @@ async function scrapeProduct(itemId, optionLabel, { headed = false } = {}) {
 
     await dismissCookieBanner(page);
 
-    // Select requested option.
-    const optionButton = page.getByRole('button', {
-      name: optionLabel,
-      exact: true
-    });
+    const optionButton =
+      page.getByRole('button', {
+        name: optionLabel,
+        exact: true
+      });
 
-    await optionButton.click({ force: true });
+    await optionButton.click({
+      force: true
+    });
 
     await dismissCookieBanner(page);
 
     await page.waitForTimeout(500);
 
-    const pricePanel = page.locator('.offer-panel');
+    const pricePanel =
+      page.locator('.offer-panel');
 
-    const checkBtn = page.getByRole('button', {
-      name: /check today.?s price/i
-    });
+    const checkBtn =
+      page.getByRole('button', {
+        name: /check today.?s price/i
+      });
 
-    // Trigger the first challenge.
+    // First challenge
     await clickPriceButton(
       page,
       pricePanel,
@@ -304,29 +455,36 @@ async function scrapeProduct(itemId, optionLabel, { headed = false } = {}) {
 
     while (
       attempts < MAX_RETRIES &&
-      Date.now() - startTime < MAX_TOTAL_MS
+      Date.now() - startTime <
+        MAX_TOTAL_MS
     ) {
       attempts++;
 
-      const state = await waitForPrice(
-        page,
-        pricePanel
-      );
+      const state =
+        await waitForPrice(
+          page,
+          pricePanel
+        );
 
-      lastPanelText = state.panelText || '';
+      lastPanelText =
+        state.panelText || '';
 
       console.log(
-        `Attempt ${attempts}: ${state.type} | ${lastPanelText.slice(0, 180)}`
+        `Attempt ${attempts}: ${state.type} | ${lastPanelText.slice(
+          0,
+          180
+        )}`
       );
 
       // SUCCESS
       if (state.type === 'success') {
         price = state.price;
 
-        const soldOut = await page
-          .getByText(/sold out/i)
-          .isVisible()
-          .catch(() => false);
+        const soldOut =
+          await page
+            .getByText(/sold out/i)
+            .isVisible()
+            .catch(() => false);
 
         stock = soldOut
           ? 'Out of Stock'
@@ -345,20 +503,36 @@ async function scrapeProduct(itemId, optionLabel, { headed = false } = {}) {
       }
 
       // RATE LIMIT
-      if (state.type === 'rate_limited') {
+      if (
+        state.type ===
+        'rate_limited'
+      ) {
         console.log(
           `429 detected on attempt ${attempts}. Applying backoff.`
         );
 
-        // Do NOT hammer the same endpoint after 429.
-        const backoffMs = Math.min(
-          30000,
-          5000 * Math.pow(2, Math.min(attempts - 1, 3))
-        );
+        const backoffMs =
+          Math.min(
+            30000,
+            5000 *
+              Math.pow(
+                2,
+                Math.min(
+                  attempts - 1,
+                  3
+                )
+              )
+          );
 
-        await page.waitForTimeout(backoffMs);
-      } else if (
-        state.type === 'challenge_failed'
+        await page.waitForTimeout(
+          backoffMs
+        );
+      }
+
+      // CHALLENGE FAILURE
+      else if (
+        state.type ===
+        'challenge_failed'
       ) {
         challengeFailures++;
 
@@ -366,43 +540,66 @@ async function scrapeProduct(itemId, optionLabel, { headed = false } = {}) {
           `Challenge failed (${challengeFailures}).`
         );
 
-        await page.waitForTimeout(1000);
-      } else if (state.type === 'timeout') {
+        await page.waitForTimeout(
+          1000
+        );
+      }
+
+      // TIMEOUT
+      else if (
+        state.type === 'timeout'
+      ) {
         console.log(
           `Price still loading after ${ATTEMPT_WAIT_MS}ms.`
         );
 
-        await page.waitForTimeout(1000);
+        await page.waitForTimeout(
+          1000
+        );
       }
 
-      // Reset browser-side challenge state periodically.
+      // Periodically reload after repeated
+      // challenge failures.
       if (
         challengeFailures > 0 &&
-        challengeFailures % RELOAD_AFTER_FAILURES === 0
+        challengeFailures %
+          RELOAD_AFTER_FAILURES ===
+          0
       ) {
         console.log(
           'Reloading page to reset challenge state...'
         );
 
         await page.reload({
-          waitUntil: 'domcontentloaded',
+          waitUntil:
+            'domcontentloaded',
           timeout: 60000
         });
 
-        await page.waitForTimeout(1500);
+        await page.waitForTimeout(
+          1500
+        );
 
-        await dismissCookieBanner(page);
+        await dismissCookieBanner(
+          page
+        );
 
         await page
           .getByRole('button', {
             name: optionLabel,
             exact: true
           })
-          .click({ force: true });
+          .click({
+            force: true
+          });
 
-        await dismissCookieBanner(page);
+        await dismissCookieBanner(
+          page
+        );
 
-        await page.waitForTimeout(500);
+        await page.waitForTimeout(
+          500
+        );
 
         await clickPriceButton(
           page,
@@ -410,17 +607,20 @@ async function scrapeProduct(itemId, optionLabel, { headed = false } = {}) {
           checkBtn
         );
       } else {
-        // Regular retry.
-        const clicked = await clickRetry(
-          page,
-          pricePanel
-        );
+        // Normal retry.
+        const clicked =
+          await clickRetry(
+            page,
+            pricePanel
+          );
 
         if (!clicked) {
-          // Sometimes the page may expose the check button again.
-          const checkVisible = await checkBtn
-            .isVisible()
-            .catch(() => false);
+          const checkVisible =
+            await checkBtn
+              .isVisible()
+              .catch(
+                () => false
+              );
 
           if (checkVisible) {
             try {
@@ -443,19 +643,24 @@ async function scrapeProduct(itemId, optionLabel, { headed = false } = {}) {
     if (price === null) {
       console.log(
         `FAILED: no price after ${attempts} attempts / ${
-          Date.now() - startTime
+          Date.now() -
+          startTime
         }ms`
       );
 
       recordFailure({
         itemId,
         optionLabel,
-        timestamp: new Date().toISOString(),
+        timestamp:
+          new Date().toISOString(),
         attempts,
-        panelText: lastPanelText,
+        panelText:
+          lastPanelText,
         networkLog,
         screenshot:
-          await captureFailureScreenshot(page)
+          await captureFailureScreenshot(
+            page
+          )
       });
     }
   } catch (err) {
@@ -467,9 +672,11 @@ async function scrapeProduct(itemId, optionLabel, { headed = false } = {}) {
     recordFailure({
       itemId,
       optionLabel,
-      timestamp: new Date().toISOString(),
+      timestamp:
+        new Date().toISOString(),
       attempts,
-      panelText: lastPanelText,
+      panelText:
+        lastPanelText,
       networkLog,
       error: err.message
     });
@@ -484,7 +691,8 @@ async function scrapeProduct(itemId, optionLabel, { headed = false } = {}) {
     stock,
     outcome,
     attempts,
-    timestamp: new Date().toISOString()
+    timestamp:
+      new Date().toISOString()
   };
 }
 
