@@ -46,10 +46,11 @@ export default function HistoryPanel({ productId, refreshKey }) {
       cancelled = true;
       clearInterval(interval);
     };
-}, [productId, refreshKey]);
+  }, [productId, refreshKey]);
 
   if (loading) return <p className="empty-state">Loading history…</p>;
   if (error) return <p className="form-error">{error}</p>;
+
   if (!log.length) {
     return (
       <p className="empty-state">
@@ -65,11 +66,13 @@ export default function HistoryPanel({ productId, refreshKey }) {
       <div>
         <div style={{ marginBottom: 12 }}>
           <div className="price-label">Latest price</div>
+
           <div className="price-now">
             {latest.price != null
               ? `₹${latest.price.toLocaleString('en-IN')}`
               : '—'}
           </div>
+
           <div className="price-label">
             {latest.stock || 'Unknown stock'} · last checked{' '}
             {formatTimestamp(latest.timestamp)}
@@ -92,25 +95,33 @@ export default function HistoryPanel({ productId, refreshKey }) {
                 <th>Price</th>
                 <th>Stock</th>
                 <th>Outcome</th>
+                <th>Attempt</th>
               </tr>
             </thead>
 
             <tbody>
-              {[...log].reverse().map((entry) => (
-                <tr key={entry.timestamp}>
+              {[...log].reverse().map((entry, index) => (
+                <tr key={`${entry.timestamp}-${index}`}>
                   <td>{formatTimestamp(entry.timestamp)}</td>
+
                   <td>
                     {entry.price != null
                       ? `₹${entry.price.toLocaleString('en-IN')}`
                       : '—'}
                   </td>
+
                   <td>{entry.stock || '—'}</td>
+
                   <td>
                     <span
                       className={`status-pill status-${entry.outcome}`}
                     >
                       {entry.outcome}
                     </span>
+                  </td>
+
+                  <td>
+                    {entry.attempts != null ? entry.attempts : '—'}
                   </td>
                 </tr>
               ))}
