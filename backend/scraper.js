@@ -113,6 +113,29 @@ async function clickPriceButton(page, pricePanel, checkBtn) {
 async function getPanelState(page, pricePanel) {
   const panelText = await pricePanel.innerText().catch(() => '');
 
+    const priceElements = await pricePanel
+    .locator('text=/₹\\s*[\\d,]+(?:\\.\\d{1,2})?/')
+    .all();
+
+  for (let i = 0; i < priceElements.length; i++) {
+    try {
+      console.log(`PRICE ${i + 1}:`);
+      console.log('TEXT:', await priceElements[i].innerText());
+      console.log(
+        'TAG:',
+        await priceElements[i].evaluate(el => el.tagName)
+      );
+      console.log(
+        'CLASS:',
+        await priceElements[i].evaluate(el => el.className)
+      );
+      console.log(
+        'HTML:',
+        (await priceElements[i].evaluate(el => el.outerHTML)).slice(0, 1000)
+      );
+    } catch {}
+  }
+
   const priceTexts = await pricePanel
     .locator('text=/₹\\s*[\\d,]+(?:\\.\\d{1,2})?/')
     .allTextContents()
@@ -121,7 +144,7 @@ async function getPanelState(page, pricePanel) {
   if (priceTexts.length) {
       console.log('ALL PRICE TEXTS FOUND:', priceTexts);
 
-      const price = parsePrice(priceTexts[priceTexts.length - 1]);
+  const price = parsePrice(priceTexts[priceTexts.length - 1]);
 
     if (price !== null) {
       return {
