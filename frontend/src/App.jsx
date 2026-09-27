@@ -10,7 +10,6 @@ export default function App() {
   const [scrapingAll, setScrapingAll] = useState(false);
 
   function loadProducts() {
-    setLoading(true);
     api
       .listProducts()
       .then(setProducts)
@@ -18,7 +17,16 @@ export default function App() {
       .finally(() => setLoading(false));
   }
 
-  useEffect(loadProducts, []);
+  // Initial load + automatic refresh every 15 seconds
+  useEffect(() => {
+    loadProducts();
+
+    const interval = setInterval(() => {
+      loadProducts();
+    }, 15000);
+
+    return () => clearInterval(interval);
+  }, []);
 
   async function handleAdd(payload) {
     await api.addProduct(payload);
@@ -27,12 +35,14 @@ export default function App() {
 
   async function handleScrapeOne(productId) {
     await api.scrapeOne(productId);
+    loadProducts();
   }
 
   async function handleScrapeAll() {
     setScrapingAll(true);
     try {
       await api.scrapeAll();
+      loadProducts();
     } finally {
       setScrapingAll(false);
     }
@@ -64,12 +74,20 @@ export default function App() {
         <div>
           {loading && <p className="empty-state">Loading tracked products…</p>}
           {listError && <p className="form-error">{listError}</p>}
+
           {!loading && !products.length && (
-            <p className="empty-state">No products tracked yet. Add one on the left.</p>
+            <p className="empty-state">
+              No products tracked yet. Add one on the left.
+            </p>
           )}
+
           <div className="product-list">
             {products.map((product) => (
-              <ProductCard key={product.id} product={product} onScrapeOne={handleScrapeOne} />
+              <ProductCard
+                key={product.id}
+                product={product}
+                onScrapeOne={handleScrapeOne}
+              />
             ))}
           </div>
         </div>
