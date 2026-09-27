@@ -113,6 +113,8 @@ async function clickPriceButton(page, pricePanel, checkBtn) {
 async function getPanelState(page, pricePanel) {
   const panelText = await pricePanel.innerText().catch(() => '');
 
+  console.log('FULL PANEL HTML:', (await pricePanel.innerHTML()).slice(0, 10000));
+
     const priceElements = await pricePanel
     .locator('text=/₹\\s*[\\d,]+(?:\\.\\d{1,2})?/')
     .all();
