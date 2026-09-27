@@ -113,46 +113,41 @@ async function clickPriceButton(page, pricePanel, checkBtn) {
 async function getPanelState(page, pricePanel) {
   const panelText = await pricePanel.innerText().catch(() => '');
 
-  // Find visible price-like elements and ignore hidden/old/member prices.
-  const priceCandidates = await pricePanel.locator('span').evaluateAll(spans =>
-    spans.map(el => {
-      const style = window.getComputedStyle(el);
-      const rect = el.getBoundingClientRect();
+  // Remove zero-width characters used by the store in the visible price.
+  const cleanText = panelText
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .replace(/\s+/g, ' ');
 
-      return {
-        text: el.innerText || el.textContent || '',
-        className: el.className || '',
-        display: style.display,
-        visibility: style.visibility,
-        textDecoration: style.textDecoration,
-        visible:
-          style.display !== 'none' &&
-          style.visibility !== 'hidden' &&
-          rect.width > 0 &&
-          rect.height > 0
-      };
-    })
-  ).catch(() => []);
+    console.log('CLEAN PANEL:', cleanText.slice(0, 500));
 
-  console.log('PRICE CANDIDATES:', priceCandidates);
+  // Ignore the old struck-through price and look at the visible
+  // current-price area in the offer panel.
+  const lines = cleanText
+    .split('\n')
+    .map(x => x.trim())
+    .filter(Boolean);
 
-  const visiblePrices = priceCandidates
-    .filter(p => p.visible)
-    .filter(p => !/line-through/i.test(p.textDecoration || ''))
-    .filter(p => !/member price/i.test(p.text))
-    .map(p => p.text.replace(/[\u200B-\u200D\uFEFF]/g, ''));
+  console.log('CLEAN PANEL:', cleanText.slice(0, 500));
 
-  console.log('VISIBLE PRICE TEXTS:', visiblePrices);
+  // Current price appears immediately before the savings/delivery information.
+  // Look for a rupee amount that is NOT an obvious old/member price.
+  for (const line of lines) {
+    if (
+      /₹\s*[\d,]+(?:\.\d{1,2})?/.test(line) &&
+      !/member price/i.test(line) &&
+      !/saving/i.test(line) &&
+      !/usually/i.test(line) &&
+      !/delivered/i.test(line)
+    ) {
+      const price = parsePrice(line);
 
-  for (const text of visiblePrices) {
-    const price = parsePrice(text);
-
-    if (price !== null) {
-      return {
-        type: 'success',
-        price,
-        panelText
-      };
+      if (price !== null) {
+        return {
+          type: 'success',
+          price,
+          panelText
+        };
+      }
     }
   }
 
@@ -173,66 +168,6 @@ async function getPanelState(page, pricePanel) {
   }
 
   return { type: 'unknown', panelText };
-}
-
-async function waitForPrice(page, pricePanel) {
-  const deadline = Date.now() + ATTEMPT_WAIT_MS;
-
-  let lastText = '';
-
-  while (Date.now() < deadline) {
-    await dismissCookieBanner(page);
-
-    const state = await getPanelState(page, pricePanel);
-
-    lastText = state.panelText;
-
-    if (state.type === 'success') {
-      return state;
-    }
-
-    if (
-      state.type === 'challenge_failed' ||
-      state.type === 'rate_limited' ||
-      state.type === 'failed'
-    ) {
-      return state;
-    }
-
-    // Loading/unknown are NOT failures yet.
-    await page.waitForTimeout(POLL_MS);
-  }
-
-  return {
-    type: 'timeout',
-    panelText: lastText
-  };
-}
-
-async function clickRetry(page, pricePanel) {
-  await dismissCookieBanner(page);
-
-  await hoverPricePanel(page, pricePanel).catch(() => {});
-
-  const retryBtn = page.getByRole('button', {
-    name: /retry|check again/i
-  });
-
-  const visible = await retryBtn.isVisible().catch(() => false);
-
-  if (!visible) {
-    return false;
-  }
-
-  const enabled = await retryBtn.isEnabled().catch(() => false);
-
-  if (!enabled) {
-    return false;
-  }
-
-  await retryBtn.click({ force: true });
-
-  return true;
 }
 
 async function captureFailureScreenshot(page) {
