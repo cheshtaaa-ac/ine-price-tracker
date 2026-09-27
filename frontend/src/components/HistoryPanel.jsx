@@ -11,7 +11,7 @@ function formatTimestamp(ts) {
   });
 }
 
-export default function HistoryPanel({ productId }) {
+export default function HistoryPanel({ productId, refreshKey }) {
   const [log, setLog] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -46,7 +46,7 @@ export default function HistoryPanel({ productId }) {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [productId]);
+}, [productId, refreshKey]);
 
   if (loading) return <p className="empty-state">Loading history…</p>;
   if (error) return <p className="form-error">{error}</p>;

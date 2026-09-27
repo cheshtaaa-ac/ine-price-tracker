@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import HistoryPanel from './HistoryPanel';
 
-export default function ProductCard({ product, onScrapeOne }) {
+export default function ProductCard({ product, onScrapeOne, refreshKey }) {
   const [open, setOpen] = useState(false);
   const [scraping, setScraping] = useState(false);
 
@@ -33,7 +33,7 @@ export default function ProductCard({ product, onScrapeOne }) {
       </div>
       {open && (
         <div className="product-detail">
-          <HistoryPanel productId={product.id} />
+          <HistoryPanel productId={product.id} refreshKey={refreshKey} />
         </div>
       )}
     </div>

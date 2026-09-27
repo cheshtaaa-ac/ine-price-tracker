@@ -8,6 +8,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [listError, setListError] = useState('');
   const [scrapingAll, setScrapingAll] = useState(false);
+  const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
 
   function loadProducts() {
     api
@@ -36,6 +37,7 @@ export default function App() {
   async function handleScrapeOne(productId) {
     await api.scrapeOne(productId);
     loadProducts();
+    setHistoryRefreshKey((v) => v + 1);
   }
 
   async function handleScrapeAll() {
@@ -43,6 +45,7 @@ export default function App() {
     try {
       await api.scrapeAll();
       loadProducts();
+      setHistoryRefreshKey((v) => v + 1);
     } finally {
       setScrapingAll(false);
     }
@@ -53,12 +56,21 @@ export default function App() {
       <div className="topbar">
         <div>
           <h1>Price Watch</h1>
-          <p>Tracking product price and stock on the INE mock store, every 2 hours.</p>
+          <p>
+            Tracking product price and stock on the INE mock store, every 2
+            hours.
+          </p>
         </div>
+
         <div className="topbar-actions">
-          <button className="btn" onClick={handleScrapeAll} disabled={scrapingAll}>
+          <button
+            className="btn"
+            onClick={handleScrapeAll}
+            disabled={scrapingAll}
+          >
             {scrapingAll ? 'Scraping all…' : 'Scrape all now'}
           </button>
+
           <a className="btn" href={api.exportUrl()}>
             Export CSV
           </a>
@@ -72,7 +84,10 @@ export default function App() {
         </div>
 
         <div>
-          {loading && <p className="empty-state">Loading tracked products…</p>}
+          {loading && (
+            <p className="empty-state">Loading tracked products…</p>
+          )}
+
           {listError && <p className="form-error">{listError}</p>}
 
           {!loading && !products.length && (
@@ -87,6 +102,7 @@ export default function App() {
                 key={product.id}
                 product={product}
                 onScrapeOne={handleScrapeOne}
+                refreshKey={historyRefreshKey}
               />
             ))}
           </div>
