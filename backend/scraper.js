@@ -119,7 +119,9 @@ async function getPanelState(page, pricePanel) {
     .catch(() => []);
 
   if (priceTexts.length) {
-    const price = parsePrice(priceTexts[priceTexts.length - 1]);
+      console.log('ALL PRICE TEXTS FOUND:', priceTexts);
+
+      const price = parsePrice(priceTexts[priceTexts.length - 1]);
 
     if (price !== null) {
       return {
