@@ -404,6 +404,7 @@ async function scrapeProduct(
 
   let attempts = 0;
   let challengeFailures = 0;
+  let attemptLogs = [];
 
   let outcome = 'failed';
   let price = null;
@@ -460,6 +461,9 @@ async function scrapeProduct(
     ) {
       attempts++;
 
+      const attemptTimestamp =
+        new Date().toISOString();
+
       const state =
         await waitForPrice(
           page,
@@ -495,12 +499,32 @@ async function scrapeProduct(
             ? 'success'
             : 'retried';
 
+        attemptLogs.push({
+          attempts,
+          timestamp: attemptTimestamp,
+          price,
+          stock,
+          outcome: 'success'
+        });
+
         console.log(
           `SUCCESS: price=${price}, stock=${stock}, attempts=${attempts}`
         );
 
         break;
       }
+
+      // Record every unsuccessful attempt.
+      attemptLogs.push({
+        attempts,
+        timestamp: attemptTimestamp,
+        price: null,
+        stock: null,
+        outcome:
+          attempts >= MAX_RETRIES
+            ? 'failed'
+            : 'retried'
+      });
 
       // RATE LIMIT
       if (
@@ -648,6 +672,14 @@ async function scrapeProduct(
         }ms`
       );
 
+      // Make sure the final unsuccessful attempt
+      // is marked as failed.
+      if (attemptLogs.length > 0) {
+        attemptLogs[
+          attemptLogs.length - 1
+        ].outcome = 'failed';
+      }
+
       recordFailure({
         itemId,
         optionLabel,
@@ -668,6 +700,30 @@ async function scrapeProduct(
       'Scrape error:',
       err.message
     );
+
+    // If an unexpected error occurs before
+    // an attempt was logged, record it as
+    // a failed attempt.
+    if (attempts === 0) {
+      attempts = 1;
+
+      attemptLogs.push({
+        attempts,
+        timestamp:
+          new Date().toISOString(),
+        price: null,
+        stock: null,
+        outcome: 'failed'
+      });
+    } else if (
+      attemptLogs.length > 0
+    ) {
+      attemptLogs[
+        attemptLogs.length - 1
+      ].outcome = 'failed';
+    }
+
+    outcome = 'failed';
 
     recordFailure({
       itemId,
@@ -692,7 +748,8 @@ async function scrapeProduct(
     outcome,
     attempts,
     timestamp:
-      new Date().toISOString()
+      new Date().toISOString(),
+    attemptLogs
   };
 }
 
