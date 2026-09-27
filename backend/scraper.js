@@ -113,40 +113,39 @@ async function clickPriceButton(page, pricePanel, checkBtn) {
 async function getPanelState(page, pricePanel) {
   const panelText = await pricePanel.innerText().catch(() => '');
 
-  console.log('FULL PANEL HTML:', (await pricePanel.innerHTML()).slice(0, 10000));
+  // Find visible price-like elements and ignore hidden/old/member prices.
+  const priceCandidates = await pricePanel.locator('span').evaluateAll(spans =>
+    spans.map(el => {
+      const style = window.getComputedStyle(el);
+      const rect = el.getBoundingClientRect();
 
-    const priceElements = await pricePanel
-    .locator('text=/₹\\s*[\\d,]+(?:\\.\\d{1,2})?/')
-    .all();
+      return {
+        text: el.innerText || el.textContent || '',
+        className: el.className || '',
+        display: style.display,
+        visibility: style.visibility,
+        textDecoration: style.textDecoration,
+        visible:
+          style.display !== 'none' &&
+          style.visibility !== 'hidden' &&
+          rect.width > 0 &&
+          rect.height > 0
+      };
+    })
+  ).catch(() => []);
 
-  for (let i = 0; i < priceElements.length; i++) {
-    try {
-      console.log(`PRICE ${i + 1}:`);
-      console.log('TEXT:', await priceElements[i].innerText());
-      console.log(
-        'TAG:',
-        await priceElements[i].evaluate(el => el.tagName)
-      );
-      console.log(
-        'CLASS:',
-        await priceElements[i].evaluate(el => el.className)
-      );
-      console.log(
-        'HTML:',
-        (await priceElements[i].evaluate(el => el.outerHTML)).slice(0, 1000)
-      );
-    } catch {}
-  }
+  console.log('PRICE CANDIDATES:', priceCandidates);
 
-  const priceTexts = await pricePanel
-    .locator('text=/₹\\s*[\\d,]+(?:\\.\\d{1,2})?/')
-    .allTextContents()
-    .catch(() => []);
+  const visiblePrices = priceCandidates
+    .filter(p => p.visible)
+    .filter(p => !/line-through/i.test(p.textDecoration || ''))
+    .filter(p => !/member price/i.test(p.text))
+    .map(p => p.text.replace(/[\u200B-\u200D\uFEFF]/g, ''));
 
-  if (priceTexts.length) {
-      console.log('ALL PRICE TEXTS FOUND:', priceTexts);
+  console.log('VISIBLE PRICE TEXTS:', visiblePrices);
 
-  const price = parsePrice(priceTexts[priceTexts.length - 1]);
+  for (const text of visiblePrices) {
+    const price = parsePrice(text);
 
     if (price !== null) {
       return {
@@ -158,37 +157,22 @@ async function getPanelState(page, pricePanel) {
   }
 
   if (/challenge_failed/i.test(panelText)) {
-    return {
-      type: 'challenge_failed',
-      panelText
-    };
+    return { type: 'challenge_failed', panelText };
   }
 
   if (/upstream\s*429/i.test(panelText)) {
-    return {
-      type: 'rate_limited',
-      panelText
-    };
+    return { type: 'rate_limited', panelText };
   }
 
   if (/couldn.?t load the price/i.test(panelText)) {
-    return {
-      type: 'failed',
-      panelText
-    };
+    return { type: 'failed', panelText };
   }
 
   if (/loading current price|retrying/i.test(panelText)) {
-    return {
-      type: 'loading',
-      panelText
-    };
+    return { type: 'loading', panelText };
   }
 
-  return {
-    type: 'unknown',
-    panelText
-  };
+  return { type: 'unknown', panelText };
 }
 
 async function waitForPrice(page, pricePanel) {
