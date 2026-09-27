@@ -67,24 +67,54 @@ app.post('/scrape/:productId', async (req, res) => {
   res.json(result);
 });
 
-// Scrape ALL tracked products (this is what cron-job.org will hit every 2 hours)
 app.post('/scrape-all', async (req, res) => {
-  const { data: products, error } = await supabase.from('tracked_products').select('*');
-  if (error) return res.status(500).json({ error: error.message });
+  const { data: products, error } = await supabase
+    .from('tracked_products')
+    .select('*');
 
-  const results = [];
-  for (const product of products) {
-    const result = await scrapeProduct(product.store_product_id, product.option_name);
-    await supabase.from('scrape_log').insert([{
-      product_id: product.id,
-      timestamp: result.timestamp,
-      price: result.price,
-      stock: result.stock,
-      outcome: result.outcome
-    }]);
-    results.push({ product: product.product_name, ...result });
+  if (error) {
+    return res.status(500).json({ error: error.message });
   }
-  res.json({ scraped: results.length, results });
+
+  // Respond immediately so cron-job.org does not wait
+  // for all Playwright scrapes to finish.
+  res.status(202).json({
+    message: 'Scrape started',
+    products: products.length,
+  });
+
+  // Continue scraping in the background.
+  (async () => {
+    for (const product of products) {
+      try {
+        const result = await scrapeProduct(
+          product.store_product_id,
+          product.option_name
+        );
+
+        await supabase.from('scrape_log').insert([
+          {
+            product_id: product.id,
+            timestamp: result.timestamp,
+            price: result.price,
+            stock: result.stock,
+            outcome: result.outcome,
+          },
+        ]);
+
+        console.log(
+          `Scheduled scrape: ${product.product_name} → ${result.outcome}`
+        );
+      } catch (err) {
+        console.error(
+          `Scheduled scrape failed for ${product.product_name}:`,
+          err.message
+        );
+      }
+    }
+
+    console.log('Scheduled scrape-all run finished.');
+  })();
 });
 
 // Price/stock history + scrape log for one product
